@@ -34,7 +34,7 @@ import matplotlib.pyplot as plt
 CACHE = 'calc_amp_mod_data.npz'
 
 
-def simulate(c_freq=400, sound_freq=400, itd=200e-6, n_neuron=300):
+def simulate(c_freq=200, sound_freq=400, itd=200e-6, n_neuron=300):
     """Run the full MSO simulation.
 
     Returns
@@ -157,7 +157,7 @@ def load_cache(path):
                 float(data['duration']))
 
 
-def plot(left, right, duration, bin_width=30e-3):
+def plot(left, right, duration, n_neuron, bin_width=30e-3):
     """Plot the firing-rate difference (contra - ipsi) as a function of time."""
     # Trim the silent padding at the start/stop (same as before: 0.125 .. 2.125 s).
     start, stop = 0.125, 2.125
@@ -172,7 +172,7 @@ def plot(left, right, duration, bin_width=30e-3):
     rate_r = rate_r.astype(float) / bin_width
 
     fig, ax = plt.subplots(1, 1)
-    ax.plot(bins[:-1], rate_r - rate_l)
+    ax.plot(bins[:-1], (rate_r - rate_l) / n_neuron)
     ax.set_xlabel('time / s')
     ax.set_ylabel('$\Delta R$ / sps')
     fig.tight_layout()
@@ -183,6 +183,7 @@ def plot(left, right, duration, bin_width=30e-3):
 def main():
     force = '--force' in sys.argv
     plot_only = '--plot' in sys.argv
+    n_neuron = 300
 
     if (not force) and os.path.exists(CACHE):
         print('Found cache %s; skipping simulation (use --force to re-run).'
@@ -191,13 +192,13 @@ def main():
     else:
         if plot_only:
             print('No cache found at %s; running simulation first.' % CACHE)
-        left, right, duration = simulate()
+        left, right, duration = simulate(n_neuron=n_neuron)
 
     # Only write the cache if we actually simulated (or forced it).
     if force or not os.path.exists(CACHE):
         save_cache(CACHE, left, right, duration)
 
-    plot(left, right, duration)
+    plot(left, right, duration, n_neuron=n_neuron)
 
 
 if __name__ == '__main__':
