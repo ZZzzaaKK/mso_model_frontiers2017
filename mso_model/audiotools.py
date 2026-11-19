@@ -133,62 +133,126 @@ def cosine_fade_window(signal, rise_time, fs, n_zeros=0):
     return window
 
 
-def delay_signal(signal, delay, fs):
-    '''Delay by phase shifting in the frequncy domain.
+def _apply_delay(signal, delay, fs):
+    """Return a copy of `signal` delayed by `delay` seconds (delay >= 0)."""
+    if delay <= 0:
+        return signal.copy()
 
-    This function delays a given signal in the frequncy domain
-    allowing for subsample time shifts.
+    delay = float(delay)
+    signal = np.asarray(signal, dtype=float)
+
+    # Number of extra samples needed to avoid circular wrap-around.
+    n_delay_smp = int(np.ceil(delay * fs))
+    n = len(signal) + n_delay_smp
+
+    padded = np.zeros(n)
+    padded[:len(signal)] = signal
+
+    freqs = np.fft.fftfreq(n, 1. / fs)
+    phase = np.exp(-1j * 2 * np.pi * delay * freqs)
+
+    delayed = np.fft.ifft(np.fft.fft(padded) * phase)
+    delayed = np.real_if_close(delayed, 1000)
+
+    return delayed[:len(signal)]
+
+
+def delay_signal(signal, delay, fs):
+    '''Apply an interaural time difference (ITD).
+
+    Convention follows the paper:
+
+        positive delay -> right ear leads (left channel delayed)
+        negative delay -> left ear leads (right channel delayed)
 
     Parameters
     ----------
     signal : ndarray
-        The signal to shift
+        Mono signal.
     delay : scalar
-        The delay in seconds
-    fs :  scalar
-        The signals sampling rate in Hz
+        ITD in seconds. May be positive or negative.
+    fs : scalar
+        Sampling rate in Hz.
 
     Returns
     -------
-     ndarray : A array of shape [N, 2] where N is the length of the
-         input signal. [:, 0] is the 0 padded original signal, [:, 1]
-         the delayed signal
-
+    ndarray
+        Array of shape [len(signal), 2]. Channel 0 is the left ear,
+        channel 1 is the right ear.
     '''
+    signal = np.asarray(signal, dtype=float)
+    delay = float(delay)
 
-    #Only Positive Delays allowed
-    assert delay >= 0
+    if delay > 0:
+        # Right ear leads: left ear is delayed.
+        left = _apply_delay(signal, delay, fs)
+        right = signal.copy()
+    else:
+        # Left ear leads: right ear is delayed.
+        left = signal.copy()
+        right = _apply_delay(signal, -delay, fs)
 
-    # save the original length of the signal
-    len_sig = len(signal)
-
-    #due to the cyclic nature of the shift, pad the signal with
-    #enough zeros
-    n_pad = np.int(np.ceil(np.abs(delay * fs)))
-    pad = np.zeros(n_pad)
-    signal = np.concatenate([pad, signal, pad])
-
-    #Apply FFT
-    signal = pad_for_fft(signal)
-    ft_signal = np.fft.fft(signal)
-
-    #Calculate the phases need for shifting and apply them to the
-    #spectrum
-    freqs = np.fft.fftfreq(len(ft_signal), 1. / fs)
-    ft_signal *= np.exp(-1j * 2 * np.pi * delay * freqs)
-
-    #Inverse transform the spectrum and leave away the imag. part if
-    #it is really small
-    shifted_signal = np.fft.ifft(ft_signal)
-    shifted_signal = np.real_if_close(shifted_signal, 1000)
-
-    both = np.column_stack([signal, shifted_signal])
-
-    # cut away the buffering
-    both = both[n_pad:len_sig + 2 * n_pad, :]
-    return both
+    return np.column_stack([left, right])
 
 
+# TODO: old delay_signal function -> remove after testing new one
+# def delay_signal(signal, delay, fs):
+#     '''Delay by phase shifting in the frequency domain.
+#
+#     This function delays a given signal in the frequncy domain
+#     allowing for subsample time shifts.
+#
+#     Parameters
+#     ----------
+#     signal : ndarray
+#         The signal to shift
+#     delay : scalar
+#         The delay in seconds
+#     fs :  scalar
+#         The signals sampling rate in Hz
+#
+#     Returns
+#     -------
+#      ndarray : A array of shape [N, 2] where N is the length of the
+#          input signal. [:, 0] is the 0 padded original signal, [:, 1]
+#          the delayed signal
+#
+#     '''
+#
+#     #Only Positive Delays allowed
+#     assert delay >= 0
+#
+#     # save the original length of the signal
+#     len_sig = len(signal)
+#
+#     #due to the cyclic nature of the shift, pad the signal with
+#     #enough zeros
+#     n_pad = np.int(np.ceil(np.abs(delay * fs)))
+#     pad = np.zeros(n_pad)
+#     signal = np.concatenate([pad, signal, pad])
+#
+#     #Apply FFT
+#     signal = pad_for_fft(signal)
+#     ft_signal = np.fft.fft(signal)
+#
+#     #Calculate the phases need for shifting and apply them to the
+#     #spectrum
+#     freqs = np.fft.fftfreq(len(ft_signal), 1. / fs)
+#     ft_signal *= np.exp(-1j * 2 * np.pi * delay * freqs)
+#
+#     #Inverse transform the spectrum and leave away the imag. part if
+#     #it is really small
+#     shifted_signal = np.fft.ifft(ft_signal)
+#     shifted_signal = np.real_if_close(shifted_signal, 1000)
+#
+#     both = np.column_stack([signal, shifted_signal])
+#
+#     # cut away the buffering
+#     both = both[n_pad:len_sig + 2 * n_pad, :]
+#     return both
+
+
+# TODO: remove this too after testing new delay_signal() function
 def pad_for_fft(signal):
     '''Zero buffer a signal with zeros so that it reaches the next closest
        :math`$2^n$` length.

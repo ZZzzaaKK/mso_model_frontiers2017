@@ -22,7 +22,6 @@ import numpy as np
 import brian as br
 from brian.units import second
 import cochlea as coch
-import thorns
 
 from mso_model.mso_connect import inhibitory_to_mso, excitatory_to_mso, cochlea_to_gbc
 from mso_model.mso import make_mso_group
@@ -31,16 +30,17 @@ import mso_model.audiotools as audio
 
 import matplotlib.pyplot as plt
 
+
 CACHE = 'calc_amp_mod_data.npz'
 
 
-def simulate(c_freq=200, sound_freq=400, itd=200e-6, n_neuron=300):
+def simulate(c_freq=400, sound_freq=800, itd=200e-6, n_neuron=300):
     """Run the full MSO simulation.
 
     Returns
     -------
-    (spike_times_left, spike_times_right, duration)
-        Each is a flat numpy array of spike times in seconds.
+    (spike_times_anf_left, spike_times_anf_right, spike_times_mso_left, spike_times_mso_right, spike_times_gbc_left, spike_times_gbc_right, duration)
+        The spike_times variables are flat numpy arrays of spike times in seconds.
     """
     br.defaultclock.dt = 20E-6 * second
 
@@ -59,7 +59,7 @@ def simulate(c_freq=200, sound_freq=400, itd=200e-6, n_neuron=300):
     sound = sound * audio.cosine_fade_window(sound, 20e-3, fs_coch)
     sound = np.concatenate((np.zeros(n_pad), sound, np.zeros(n_pad)))
 
-    sound = audio.delay_signal(sound, np.abs(itd), fs_coch)
+    sound = audio.delay_signal(sound, itd, fs_coch)
 
     duration = len(sound) / fs_coch
 
@@ -120,8 +120,14 @@ def simulate(c_freq=200, sound_freq=400, itd=200e-6, n_neuron=300):
         strength=20e-9,
         contra_delay=const_dt)
 
+    sp_anf_left = br.SpikeMonitor(anf_group_left, record=True)
+    sp_anf_right = br.SpikeMonitor(anf_group_right, record=True)
+
     sp_mon_left = br.SpikeMonitor(mso_group_left, record=True)
     sp_mon_right = br.SpikeMonitor(mso_group_right, record=True)
+
+    sp_gbc_left = br.SpikeMonitor(gbc_group_left['neuron_groups'][0], record=True)
+    sp_gbc_right = br.SpikeMonitor(gbc_group_right['neuron_groups'][0], record=True)
 
     network = ([mso_group_left, mso_group_right,
                 anf_group_left, anf_group_right,
@@ -129,35 +135,51 @@ def simulate(c_freq=200, sound_freq=400, itd=200e-6, n_neuron=300):
                 syn_mso_l_in_ipsi, syn_mso_l_in_contra,
                 syn_mso_r_ex_ipsi, syn_mso_r_ex_contra,
                 syn_mso_r_in_ipsi, syn_mso_r_in_contra,
-                sp_mon_left, sp_mon_right]
+                sp_mon_left, sp_mon_right,
+                sp_anf_left, sp_anf_right,
+                sp_gbc_left, sp_gbc_right]
                + gbc_group_left['neuron_groups']
                + gbc_group_right['neuron_groups'])
 
     run(duration, network)
 
     # Brian 1 SpikeMonitor stores flat spike times (in seconds) in .spikes.
-    spike_times_left = np.asarray(sp_mon_left.spikes, dtype=float)
-    spike_times_right = np.asarray(sp_mon_right.spikes, dtype=float)
+    spike_times_anf_left = np.asarray(sp_anf_left.spikes, dtype=float)
+    spike_times_anf_right = np.asarray(sp_anf_right.spikes, dtype=float)
 
-    return spike_times_left, spike_times_right, float(duration)
+    spike_times_mso_left = np.asarray(sp_mon_left.spikes, dtype=float)
+    spike_times_mso_right = np.asarray(sp_mon_right.spikes, dtype=float)
+
+    spike_times_gbc_left = np.asarray(sp_gbc_left.spikes, dtype=float)
+    spike_times_gbc_right = np.asarray(sp_gbc_right.spikes, dtype=float)
+
+    return spike_times_anf_left, spike_times_anf_right, spike_times_mso_left, spike_times_mso_right, spike_times_gbc_left, spike_times_gbc_right, float(duration)
 
 
-def save_cache(path, left, right, duration):
+def save_cache(path, anf_left, anf_right, mso_left, mso_right, gbc_left, gbc_right, duration):
     np.savez(path,
-             spike_times_left=left,
-             spike_times_right=right,
+             spike_times_anf_left=anf_left,
+             spike_times_anf_right=anf_right,
+             spike_times_mso_left=mso_left,
+             spike_times_mso_right=mso_right,
+             spike_times_gbc_left=gbc_left,
+             spike_times_gbc_right=gbc_right,
              duration=duration)
     print('Saved simulation result to %s' % path)
 
 
 def load_cache(path):
     with np.load(path) as data:
-        return (data['spike_times_left'],
-                data['spike_times_right'],
+        return (data['spike_times_anf_left'],
+                data['spike_times_anf_right'],
+                data['spike_times_mso_left'],
+                data['spike_times_mso_right'],
+                data['spike_times_gbc_left'],
+                data['spike_times_gbc_right'],
                 float(data['duration']))
 
 
-def plot(left, right, duration, n_neuron, bin_width=30e-3):
+def plot(left, right, duration, n_neuron, bin_width=30e-3, name='calc_amp_mod.png'):
     """Plot the firing-rate difference (contra - ipsi) as a function of time."""
     # Trim the silent padding at the start/stop (same as before: 0.125 .. 2.125 s).
     start, stop = 0.125, 2.125
@@ -176,8 +198,8 @@ def plot(left, right, duration, n_neuron, bin_width=30e-3):
     ax.set_xlabel('time / s')
     ax.set_ylabel('$\Delta R$ / sps')
     fig.tight_layout()
-    fig.savefig('calc_amp_mod.png', dpi=150)
-    print('Saved plot to calc_amp_mod.png')
+    fig.savefig(name, dpi=150)
+    print('Saved plot to %s' % name)
 
 
 def main():
@@ -186,19 +208,20 @@ def main():
     n_neuron = 300
 
     if (not force) and os.path.exists(CACHE):
-        print('Found cache %s; skipping simulation (use --force to re-run).'
-              % CACHE)
-        left, right, duration = load_cache(CACHE)
+        print('Found cache %s; skipping simulation (use --force to re-run).' % CACHE)
+        anf_left, anf_right, mso_left, mso_right, gbc_left, gbc_right, duration = load_cache(CACHE)
     else:
         if plot_only:
             print('No cache found at %s; running simulation first.' % CACHE)
-        left, right, duration = simulate(n_neuron=n_neuron)
+        anf_left, anf_right, mso_left, mso_right, gbc_left, gbc_right, duration = simulate(n_neuron=n_neuron)
 
     # Only write the cache if we actually simulated (or forced it).
     if force or not os.path.exists(CACHE):
-        save_cache(CACHE, left, right, duration)
+        save_cache(CACHE, anf_left, anf_right, mso_left, mso_right, gbc_left, gbc_right, duration)
 
-    plot(left, right, duration, n_neuron=n_neuron)
+    plot(anf_left, anf_right, duration, n_neuron=n_neuron, name='calc_amp_mod_anf.png')
+    plot(mso_left, mso_right, duration, n_neuron=n_neuron, name='calc_amp_mod_mso.png')
+    plot(gbc_left, gbc_right, duration, n_neuron=n_neuron, name='calc_amp_mod_gbc.png')
 
 
 if __name__ == '__main__':
